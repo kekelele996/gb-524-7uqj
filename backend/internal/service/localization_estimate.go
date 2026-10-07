@@ -57,20 +57,9 @@ func (s *EstimateService) Run(ctx context.Context, request dto.RunLocalizationRe
 	if err != nil {
 		return RunResult{}, err
 	}
-	inputs := make([]localization.Input, 0, len(observations))
-	for _, observation := range observations {
-		if observation.Station == nil || observation.Station.StationStatus != "active" {
-			continue
-		}
-		if err := validateFrequency(caseRecord.FrequencyCenterHz, observation.FrequencyHz, observation.BandwidthHz); err != nil {
-			return RunResult{}, err
-		}
-		inputs = append(inputs, localization.Input{
-			ObservationID: observation.ID, StationCode: observation.Station.StationCode,
-			Latitude: observation.Station.Latitude, Longitude: observation.Station.Longitude,
-			BearingDeg: observation.CorrectedBearingDeg, AccuracyDeg: observation.Station.AccuracyDeg,
-			QualityWeight: constants.QualityWeight(observation.Quality),
-		})
+	inputs, err := buildLocalizationInputs(caseRecord, observations)
+	if err != nil {
+		return RunResult{}, err
 	}
 	run, err := localization.SolveWithOutlierCandidate(inputs, s.conditionLimit, request.AllowOutlier)
 	if err != nil {
@@ -101,6 +90,107 @@ func (s *EstimateService) Run(ctx context.Context, request dto.RunLocalizationRe
 		return RunResult{}, err
 	}
 	return RunResult{Primary: primary, Candidate: candidate}, nil
+}
+
+// PlanRecompute re-intersects one open case from the observations reloaded
+// after a station calibration. It builds the corrected-bearing refresh list
+// and, when geometry still supports it, a fresh immutable estimate. It never
+// returns an error for expected solver outcomes (insufficient observations or
+// degenerate geometry); those are reported through the entry's SkipCode so the
+// station calibration itself is not rolled back.
+func (s *EstimateService) PlanRecompute(item repository.OpenRecomputeCase, updatedStation model.ReceiverStation, actor repository.Actor) (repository.CaseRecomputeEntry, error) {
+	caseRecord := item.Case
+	entry := repository.CaseRecomputeEntry{CaseID: caseRecord.ID, CaseCode: caseRecord.CaseCode, Version: caseRecord.Version}
+	for _, observation := range item.Observations {
+		if observation.StationID != updatedStation.ID {
+			continue
+		}
+		entry.Bearings = append(entry.Bearings, repository.RecomputeBearing{
+			ObservationID: observation.ID, BeforeDeg: observation.CorrectedBearingDeg,
+			AfterDeg: normalizeBearing(observation.BearingDeg + updatedStation.AntennaBiasDeg),
+		})
+	}
+	observations := make([]model.BearingObservation, 0, len(item.Observations))
+	for _, observation := range item.Observations {
+		candidate := observation
+		if candidate.StationID == updatedStation.ID {
+			station := updatedStation
+			candidate.Station = &station
+			candidate.CorrectedBearingDeg = normalizeBearing(candidate.BearingDeg + updatedStation.AntennaBiasDeg)
+		}
+		observations = append(observations, candidate)
+	}
+	inputs, skipCode := recomputeInputs(caseRecord, observations)
+	if skipCode != "" {
+		entry.SkipCode = skipCode
+		return entry, nil
+	}
+	result, err := localization.Solve(inputs, s.conditionLimit)
+	if err != nil {
+		var degenerate *localization.DegenerateError
+		if errors.As(err, &degenerate) {
+			entry.SkipCode = "GEOMETRY_DEGENERATE"
+			return entry, nil
+		}
+		if errors.Is(err, localization.ErrInsufficientObservations) {
+			entry.SkipCode = "INSUFFICIENT_OBSERVATIONS"
+			return entry, nil
+		}
+		return entry, fmt.Errorf("solve recomputed localization for case %d: %w", caseRecord.ID, err)
+	}
+	estimate, err := buildEstimate(caseRecord.ID, actor.UserID, constants.EstimateComplete, result, inputs)
+	if err != nil {
+		return entry, err
+	}
+	entry.Estimate = &estimate
+	return entry, nil
+}
+
+// buildLocalizationInputs assembles solver inputs for an analyst-triggered
+// run. A frequency mismatch is evidence of bad input and aborts the run.
+func buildLocalizationInputs(caseRecord model.InterferenceCase, observations []model.BearingObservation) ([]localization.Input, error) {
+	inputs := make([]localization.Input, 0, len(observations))
+	for _, observation := range observations {
+		if observation.Station == nil || observation.Station.StationStatus != "active" {
+			continue
+		}
+		if err := validateFrequency(caseRecord.FrequencyCenterHz, observation.FrequencyHz, observation.BandwidthHz); err != nil {
+			return nil, err
+		}
+		inputs = append(inputs, localization.Input{
+			ObservationID: observation.ID, StationCode: observation.Station.StationCode,
+			Latitude: observation.Station.Latitude, Longitude: observation.Station.Longitude,
+			BearingDeg: observation.CorrectedBearingDeg, AccuracyDeg: observation.Station.AccuracyDeg,
+			QualityWeight: constants.QualityWeight(observation.Quality),
+		})
+	}
+	return inputs, nil
+}
+
+// recomputeInputs assembles solver inputs for an automatic post-calibration
+// re-intersection. Individual observations that are no longer usable (station
+// inactive, excluded quality, or outside the case frequency window) are
+// silently dropped; only a complete lack of usable rays produces a skip code.
+func recomputeInputs(caseRecord model.InterferenceCase, observations []model.BearingObservation) ([]localization.Input, string) {
+	inputs := make([]localization.Input, 0, len(observations))
+	for _, observation := range observations {
+		if observation.Quality == constants.QualityExcluded || observation.Station == nil || observation.Station.StationStatus != "active" {
+			continue
+		}
+		if math.Abs(caseRecord.FrequencyCenterHz-observation.FrequencyHz) > observation.BandwidthHz/2 {
+			continue
+		}
+		inputs = append(inputs, localization.Input{
+			ObservationID: observation.ID, StationCode: observation.Station.StationCode,
+			Latitude: observation.Station.Latitude, Longitude: observation.Station.Longitude,
+			BearingDeg: observation.CorrectedBearingDeg, AccuracyDeg: observation.Station.AccuracyDeg,
+			QualityWeight: constants.QualityWeight(observation.Quality),
+		})
+	}
+	if len(inputs) < 2 {
+		return nil, "INSUFFICIENT_OBSERVATIONS"
+	}
+	return inputs, ""
 }
 
 func buildEstimate(caseID, userID uint, status string, result localization.Result, inputs []localization.Input) (model.LocalizationEstimate, error) {

@@ -31,3 +31,18 @@ export interface StationCoverage {
   last_observed_at: string | null
 }
 
+export interface ReintersectedCase {
+  case_id: number
+  case_code: string
+  estimate_id?: number
+  status: 'reintersected' | 'skipped'
+  reason?: string
+}
+
+export interface StationReintersection {
+  triggered: boolean
+  open_cases: ReintersectedCase[]
+  estimates_created: number
+  skipped_cases: ReintersectedCase[]
+}
+

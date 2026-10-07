@@ -28,3 +28,18 @@ type StationCoverage struct {
 	ObservationCount int64      `json:"observation_count"`
 	LastObservedAt   *time.Time `json:"last_observed_at"`
 }
+
+type ReintersectedCase struct {
+	CaseID     uint   `json:"case_id"`
+	CaseCode   string `json:"case_code"`
+	EstimateID uint   `json:"estimate_id,omitempty"`
+	Status     string `json:"status"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+type StationReintersection struct {
+	Triggered bool                `json:"triggered"`
+	OpenCases []ReintersectedCase `json:"open_cases"`
+	Created   int                 `json:"estimates_created"`
+	Skipped   []ReintersectedCase `json:"skipped_cases"`
+}

@@ -38,10 +38,10 @@ func main() {
 	supportRepo := repository.NewSupportRepository(db)
 
 	authService := service.NewAuthService(supportRepo, cfg.JWTSecret)
-	stationService := service.NewStationService(stationRepo)
+	estimateService := service.NewEstimateService(estimateRepo, observationRepo, caseRepo, cfg.GeometryConditionLimit)
+	stationService := service.NewStationService(stationRepo, estimateService)
 	observationService := service.NewObservationService(observationRepo, stationRepo, caseRepo)
 	caseService := service.NewCaseService(caseRepo)
-	estimateService := service.NewEstimateService(estimateRepo, observationRepo, caseRepo, cfg.GeometryConditionLimit)
 	auditService := service.NewAuditService(supportRepo)
 
 	handlers := router.Handlers{

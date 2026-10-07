@@ -1,5 +1,6 @@
 export interface ApiResponse<T> {
   data: T
+  meta?: unknown
   request_id: string
 }
 

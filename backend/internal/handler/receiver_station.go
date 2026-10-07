@@ -71,9 +71,13 @@ func (h *StationHandler) Update(c *gin.Context) {
 	if !bindJSON(c, &request) {
 		return
 	}
-	station, err := h.service.Update(c.Request.Context(), id, request, actor)
+	station, reintersection, err := h.service.Update(c.Request.Context(), id, request, actor)
 	if err != nil {
 		api.Fail(c, err)
+		return
+	}
+	if reintersection.Triggered {
+		api.SuccessMeta(c, http.StatusOK, station, gin.H{"reintersection": reintersection})
 		return
 	}
 	api.Success(c, http.StatusOK, station)

@@ -36,7 +36,7 @@ docker compose down -v --remove-orphans
 
 ## 主要功能
 
-- 维护 WGS84 测向站坐标、天线偏置、精度和校准状态；原始方位与偏置校正方位同时保留。
+- 维护 WGS84 测向站坐标、天线偏置、精度和校准状态；原始方位与偏置校正方位同时保留。现场复检修改站点几何参数（坐标、偏置、精度、启用状态）后，同一事务内自动用站点当前值刷新该站参与的未结案案例的校正方位并追加一次确定性重新交汇；已确认或关闭的案例证据维持原样，历史定位结果只追加不覆盖。
 - 按案例录入频率、带宽、信号强度和质量，批量校验频率匹配与站点状态，排除操作保留原因和审计。
 - 在本地笛卡尔坐标图中显示测向站、方位射线、估计点、不确定区域、逐站残差和离群证据。
 - 二站几何交汇和三站以上加权最小二乘使用同一确定性求解器；近平行或近共线几何明确拒绝，不返回伪精确点。
@@ -106,7 +106,7 @@ docker compose down -v --remove-orphans
 | `POST` | `/api/v1/localizations/run` | 运行加权定位和离群候选，独立限流 |
 | `GET` | `/api/v1/audits` | 复核员/管理员查询不可变审计 |
 
-成功响应统一为 `{ data, request_id, meta? }`，错误响应为 `{ error: { code, message, details? }, request_id }`。分页使用 `page` 与 `page_size`，时间使用 RFC 3339 UTC。
+成功响应统一为 `{ data, request_id, meta? }`，错误响应为 `{ error: { code, message, details? }, request_id }`。`PUT /stations/:id` 在几何参数实际变化时返回 `meta.reintersection`，列出重新交汇成功（`reintersected`，含新定位 ID）与未能形成定位点（`skipped`，原因为 `INSUFFICIENT_OBSERVATIONS` 或 `GEOMETRY_DEGENERATE`，校正方位仍已刷新）的未结案案例。分页使用 `page` 与 `page_size`，时间使用 RFC 3339 UTC。
 
 ## 共享枚举出现位置
 
@@ -187,7 +187,7 @@ npm --prefix frontend run build
 - 后端未 healthy：执行 `docker compose logs backend`，检查 JWT 长度、数据库密码和 PostgreSQL 健康状态。
 - 定位返回 `FREQUENCY_MISMATCH`：确认每条观测与案例中心频率的偏差不超过该观测带宽的一半。
 - 定位返回 `GEOMETRY_DEGENERATE`：增加不同方位几何的测向站，不能通过放宽显示精度规避退化证据。
-- 状态迁移返回 `CASE_VERSION_CONFLICT`：其他请求已更新案例，刷新列表后使用新 version 重试。
+- 状态迁移返回 `CASE_VERSION_CONFLICT`：其他请求已更新案例，刷新列表后使用新 version 重试。站点复检触发的自动重新交汇同样会推进案例 `version`，此前打开的复核界面需刷新后再提交。
 - 登录后出现 401：清除当前标签页 `sessionStorage` 后重新登录；令牌不会持久化到其他浏览器会话。
 
 ## License
