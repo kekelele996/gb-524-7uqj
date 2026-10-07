@@ -37,6 +37,23 @@ func NewSupportRepository(db *gorm.DB) *SupportRepository {
 	return &SupportRepository{db: db}
 }
 
+// TransactionManager 让 service 层可以编排跨仓储的原子事务（例如站点更新后
+// 在同一事务内重算观测校正方位并重新交汇），同时避免 handler 直接接触 *gorm.DB。
+type TransactionManager struct {
+	db *gorm.DB
+}
+
+func NewTransactionManager(db *gorm.DB) *TransactionManager {
+	return &TransactionManager{db: db}
+}
+
+// Within 在单个数据库事务中执行 fn；fn 内的仓储操作必须使用返回的事务句柄。
+func (m *TransactionManager) Within(ctx context.Context, fn func(tx *gorm.DB) error) error {
+	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return fn(tx)
+	})
+}
+
 func (r *SupportRepository) Ping(ctx context.Context) error {
 	sqlDB, err := r.db.DB()
 	if err != nil {

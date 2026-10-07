@@ -16,6 +16,31 @@ var CaseStatuses = []CaseStatus{
 	CasePendingReview, CaseConfirmed, CaseClosed,
 }
 
+// OpenCaseStatuses 是尚未结案、仍允许以站点当前值重新交汇的案例状态。
+// confirmed 与 closed 已形成人工结论，历史观测校正值和定位结果必须冻结。
+var OpenCaseStatuses = []CaseStatus{
+	CaseDraft, CaseCollecting, CaseAnalyzing, CasePendingReview,
+}
+
+// IsOpenCaseStatus 判断案例是否尚未结案（可以参与站点变更后的重新交汇）。
+func IsOpenCaseStatus(status CaseStatus) bool {
+	for _, candidate := range OpenCaseStatuses {
+		if status == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+// OpenCaseStatusValues 返回 SQL IN 条件可用的未结案状态字符串。
+func OpenCaseStatusValues() []string {
+	values := make([]string, 0, len(OpenCaseStatuses))
+	for _, status := range OpenCaseStatuses {
+		values = append(values, string(status))
+	}
+	return values
+}
+
 func ValidCaseStatus(value CaseStatus) bool {
 	for _, status := range CaseStatuses {
 		if status == value {

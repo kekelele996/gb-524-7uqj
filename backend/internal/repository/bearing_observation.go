@@ -62,7 +62,12 @@ func (r *ObservationRepository) Get(ctx context.Context, id uint) (model.Bearing
 }
 
 func (r *ObservationRepository) ListForCase(ctx context.Context, caseID uint, includeExcluded bool) ([]model.BearingObservation, error) {
-	query := r.db.WithContext(ctx).Where("case_id = ?", caseID)
+	return r.ListForCaseTx(ctx, r.db, caseID, includeExcluded)
+}
+
+// ListForCaseTx 是 ListForCase 的事务版本，供跨仓储编排使用。
+func (r *ObservationRepository) ListForCaseTx(ctx context.Context, tx *gorm.DB, caseID uint, includeExcluded bool) ([]model.BearingObservation, error) {
+	query := tx.WithContext(ctx).Where("case_id = ?", caseID)
 	if !includeExcluded {
 		query = query.Where("quality <> ?", constants.QualityExcluded)
 	}
@@ -71,6 +76,59 @@ func (r *ObservationRepository) ListForCase(ctx context.Context, caseID uint, in
 		return nil, fmt.Errorf("list case observations: %w", err)
 	}
 	return observations, nil
+}
+
+// ListOpenCaseObservationsForStation 取指定测向站在所有未结案案例中的观测（含已排除），
+// 并预加载所属案例与站点，供站点变更后重算校正方位使用。
+func (r *ObservationRepository) ListOpenCaseObservationsForStation(ctx context.Context, tx *gorm.DB, stationID uint) ([]model.BearingObservation, error) {
+	var observations []model.BearingObservation
+	err := tx.WithContext(ctx).
+		Preload("Station").
+		Joins("JOIN interference_cases ON interference_cases.id = bearing_observations.case_id").
+		Where("bearing_observations.station_id = ?", stationID).
+		Where("interference_cases.case_status IN ?", constants.OpenCaseStatusValues()).
+		Order("bearing_observations.case_id ASC, bearing_observations.observed_at ASC").
+		Find(&observations).Error
+	if err != nil {
+		return nil, fmt.Errorf("list open case observations for station: %w", err)
+	}
+	return observations, nil
+}
+
+// RecalibrateObservations 在调用方事务中按站点新天线偏置重算校正方位，
+// 仅对实际发生变化的观测写库并逐条保留不可变审计，返回受影响的观测数。
+func (r *ObservationRepository) RecalibrateObservations(ctx context.Context, tx *gorm.DB, observations []model.BearingObservation, correctedByID map[uint]float64, actor Actor) (int, error) {
+	changed := 0
+	for i := range observations {
+		observation := observations[i]
+		newCorrected, ok := correctedByID[observation.ID]
+		if !ok || newCorrected == observation.CorrectedBearingDeg {
+			continue
+		}
+		before := map[string]any{
+			"id": observation.ID, "case_id": observation.CaseID,
+			"bearing_deg": observation.BearingDeg, "corrected_bearing_deg": observation.CorrectedBearingDeg,
+		}
+		result := tx.Model(&model.BearingObservation{}).
+			Where("id = ? AND corrected_bearing_deg = ?", observation.ID, observation.CorrectedBearingDeg).
+			Update("corrected_bearing_deg", newCorrected)
+		if result.Error != nil {
+			return 0, fmt.Errorf("recalibrate observation %d: %w", observation.ID, result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return 0, api.ErrConflict
+		}
+		after := map[string]any{
+			"id": observation.ID, "case_id": observation.CaseID,
+			"bearing_deg": observation.BearingDeg, "corrected_bearing_deg": newCorrected,
+		}
+		audit := NewAudit(actor, "bearing_observation.recalibrated", "bearing_observation", observation.ID, before, after)
+		if err := tx.Create(&audit).Error; err != nil {
+			return 0, fmt.Errorf("audit observation recalibration: %w", err)
+		}
+		changed++
+	}
+	return changed, nil
 }
 
 func (r *ObservationRepository) Create(ctx context.Context, observation *model.BearingObservation, actor Actor) error {

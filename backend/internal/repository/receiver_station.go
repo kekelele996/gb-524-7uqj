@@ -62,25 +62,25 @@ func (r *StationRepository) Create(ctx context.Context, station *model.ReceiverS
 	})
 }
 
-func (r *StationRepository) Update(ctx context.Context, station *model.ReceiverStation, before model.ReceiverStation, actor Actor) error {
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		result := tx.Model(&model.ReceiverStation{}).Where("id = ?", station.ID).Updates(map[string]any{
-			"name": station.Name, "latitude": station.Latitude, "longitude": station.Longitude,
-			"antenna_bias_deg": station.AntennaBiasDeg, "accuracy_deg": station.AccuracyDeg,
-			"station_status": station.StationStatus, "calibrated_at": station.CalibratedAt,
-		})
-		if result.Error != nil {
-			return fmt.Errorf("update receiver station: %w", result.Error)
-		}
-		if result.RowsAffected == 0 {
-			return api.NewError(404, "STATION_NOT_FOUND", "测向站不存在")
-		}
-		audit := NewAudit(actor, "receiver_station.calibrated", "receiver_station", station.ID, before, station)
-		if err := tx.Create(&audit).Error; err != nil {
-			return fmt.Errorf("audit receiver station update: %w", err)
-		}
-		return nil
+// SaveUpdate 在调用方提供的事务中写入站点校准更新并写审计；
+// 站点变更后的观测校正与重新交汇由 service 层在同一事务内继续编排。
+func (r *StationRepository) SaveUpdate(ctx context.Context, tx *gorm.DB, station *model.ReceiverStation, before model.ReceiverStation, actor Actor) error {
+	result := tx.Model(&model.ReceiverStation{}).Where("id = ?", station.ID).Updates(map[string]any{
+		"name": station.Name, "latitude": station.Latitude, "longitude": station.Longitude,
+		"antenna_bias_deg": station.AntennaBiasDeg, "accuracy_deg": station.AccuracyDeg,
+		"station_status": station.StationStatus, "calibrated_at": station.CalibratedAt,
 	})
+	if result.Error != nil {
+		return fmt.Errorf("update receiver station: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return api.NewError(404, "STATION_NOT_FOUND", "测向站不存在")
+	}
+	audit := NewAudit(actor, "receiver_station.calibrated", "receiver_station", station.ID, before, station)
+	if err := tx.Create(&audit).Error; err != nil {
+		return fmt.Errorf("audit receiver station update: %w", err)
+	}
+	return nil
 }
 
 func (r *StationRepository) Coverage(ctx context.Context, stationID uint) (int64, *model.BearingObservation, error) {

@@ -13,6 +13,10 @@ export interface PageResponse<T> extends ApiResponse<T> {
   meta: PageMeta
 }
 
+export interface MetaResponse<T, M> extends ApiResponse<T> {
+  meta: M
+}
+
 export interface ApiErrorPayload {
   error: {
     code: string

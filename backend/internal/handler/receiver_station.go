@@ -71,12 +71,12 @@ func (h *StationHandler) Update(c *gin.Context) {
 	if !bindJSON(c, &request) {
 		return
 	}
-	station, err := h.service.Update(c.Request.Context(), id, request, actor)
+	station, summary, err := h.service.Update(c.Request.Context(), id, request, actor)
 	if err != nil {
 		api.Fail(c, err)
 		return
 	}
-	api.Success(c, http.StatusOK, station)
+	api.SuccessMeta(c, http.StatusOK, station, gin.H{"reintersection": summary})
 }
 
 func (h *StationHandler) Coverage(c *gin.Context) {

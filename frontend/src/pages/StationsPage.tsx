@@ -1,13 +1,15 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import AddRounded from '@mui/icons-material/AddRounded'
 import CalibrationRounded from '@mui/icons-material/CompassCalibrationRounded'
-import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material'
+import EditRounded from '@mui/icons-material/EditRounded'
+import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, MenuItem, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material'
 import { BearingPlot } from '../components/common/BearingPlot'
 import { PageHeader } from '../components/common/PageHeader'
 import { useAuth } from '../hooks/useAuth'
 import { useObservationStore } from '../stores/observationStore'
 import { useStationStore } from '../stores/stationStore'
-import type { StationInput } from '../types/station'
+import type { ReceiverStation, ReintersectionSummary, StationInput } from '../types/station'
+import { reintersectionSkipText } from '../types/station'
 import { formatCoordinate, formatDateTime, formatDecimal } from '../utils/format'
 
 const initialStation: StationInput = {
@@ -15,17 +17,31 @@ const initialStation: StationInput = {
   antenna_bias_deg: 0, accuracy_deg: 1.5, station_status: 'active', calibrated_at: new Date().toISOString()
 }
 
+const toForm = (station: ReceiverStation): StationInput => ({
+  station_code: station.station_code,
+  name: station.name,
+  latitude: station.latitude,
+  longitude: station.longitude,
+  antenna_bias_deg: station.antenna_bias_deg,
+  accuracy_deg: station.accuracy_deg,
+  station_status: station.station_status,
+  calibrated_at: station.calibrated_at
+})
+
 export function StationsPage() {
   const { hasRole } = useAuth()
   const stations = useStationStore((state) => state.stations)
   const loadStations = useStationStore((state) => state.load)
   const createStation = useStationStore((state) => state.createStation)
+  const updateStation = useStationStore((state) => state.updateStation)
   const busy = useStationStore((state) => state.busy)
   const observations = useObservationStore((state) => state.observations)
   const loadObservations = useObservationStore((state) => state.load)
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<ReceiverStation | null>(null)
   const [form, setForm] = useState<StationInput>(initialStation)
   const [saving, setSaving] = useState(false)
+  const [summary, setSummary] = useState<ReintersectionSummary | null>(null)
 
   useEffect(() => {
     void Promise.all([loadStations(), loadObservations()])
@@ -33,13 +49,32 @@ export function StationsPage() {
 
   const activeCount = useMemo(() => stations.filter((station) => station.station_status === 'active').length, [stations])
 
+  const openCreate = () => {
+    setSummary(null)
+    setEditing(null)
+    setForm({ ...initialStation, calibrated_at: new Date().toISOString() })
+    setOpen(true)
+  }
+
+  const openEdit = (station: ReceiverStation) => {
+    setSummary(null)
+    setEditing(station)
+    setForm(toForm(station))
+    setOpen(true)
+  }
+
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     setSaving(true)
     try {
-      await createStation(form)
+      if (editing) {
+        const { station_code: _stationCode, ...payload } = form
+        const response = await updateStation(editing.id, payload)
+        setSummary(response.meta.reintersection)
+      } else {
+        await createStation(form)
+      }
       setOpen(false)
-      setForm({ ...initialStation, calibrated_at: new Date().toISOString() })
     } finally {
       setSaving(false)
     }
@@ -51,8 +86,10 @@ export function StationsPage() {
         eyebrow="RECEIVER GEOMETRY / CALIBRATION"
         title="测向站与观测覆盖"
         summary={`${stations.length} 个测向站 · ${activeCount} 个可参与定位 · 坐标仅用于离线局部平面计算`}
-        actions={hasRole('analyst', 'admin') ? <Button variant="contained" startIcon={<AddRounded />} onClick={() => setOpen(true)}>登记测向站</Button> : undefined}
+        actions={hasRole('analyst', 'admin') ? <Button variant="contained" startIcon={<AddRounded />} onClick={openCreate}>登记测向站</Button> : undefined}
       />
+
+      {summary && <ReintersectionAlert summary={summary} onDismiss={() => setSummary(null)} />}
 
       <section className="plot-section">
         <BearingPlot stations={stations} observations={observations.slice(0, 20)} height={390} />
@@ -61,11 +98,11 @@ export function StationsPage() {
       <section className="data-section" aria-labelledby="station-table-title">
         <Stack direction="row" justifyContent="space-between" alignItems="baseline" mb={2}>
           <Typography id="station-table-title" component="h2" variant="h6">站点校准台账</Typography>
-          <Typography variant="body2" color="text.secondary">天线偏置在保存观测时写入校正方位</Typography>
+          <Typography variant="body2" color="text.secondary">站点坐标、精度或偏置更新后，未结案案例自动以当前值重新交汇；已确认/关闭案例保持原样</Typography>
         </Stack>
         <Box className="table-scroll">
           <Table size="small" aria-label="测向站列表">
-            <TableHead><TableRow><TableCell>站点</TableCell><TableCell>WGS84 坐标</TableCell><TableCell>精度 / 偏置</TableCell><TableCell>状态</TableCell><TableCell>最近校准</TableCell></TableRow></TableHead>
+            <TableHead><TableRow><TableCell>站点</TableCell><TableCell>WGS84 坐标</TableCell><TableCell>精度 / 偏置</TableCell><TableCell>状态</TableCell><TableCell>最近校准</TableCell>{hasRole('analyst', 'admin') && <TableCell align="right">操作</TableCell>}</TableRow></TableHead>
             <TableBody>
               {stations.map((station) => (
                 <TableRow key={station.id} hover>
@@ -74,9 +111,16 @@ export function StationsPage() {
                   <TableCell className="numeric">±{formatDecimal(station.accuracy_deg, 1)}° / {station.antenna_bias_deg >= 0 ? '+' : ''}{formatDecimal(station.antenna_bias_deg, 1)}°</TableCell>
                   <TableCell><span className={`status-text status-${station.station_status}`}>{station.station_status === 'active' ? '● 已启用' : station.station_status === 'calibration_due' ? '△ 待校准' : '○ 已停用'}</span></TableCell>
                   <TableCell>{formatDateTime(station.calibrated_at)}</TableCell>
+                  {hasRole('analyst', 'admin') && (
+                    <TableCell align="right">
+                      <IconButton size="small" aria-label={`校准更新 ${station.station_code}`} onClick={() => openEdit(station)}>
+                        <EditRounded fontSize="small" />
+                      </IconButton>
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
-              {!busy && stations.length === 0 && <TableRow><TableCell colSpan={5}>尚无测向站。登记并校准站点后才能录入方位观测。</TableCell></TableRow>}
+              {!busy && stations.length === 0 && <TableRow><TableCell colSpan={hasRole('analyst', 'admin') ? 6 : 5}>尚无测向站。登记并校准站点后才能录入方位观测。</TableCell></TableRow>}
             </TableBody>
           </Table>
         </Box>
@@ -84,11 +128,11 @@ export function StationsPage() {
 
       <Dialog open={open} onClose={saving ? undefined : () => setOpen(false)} fullWidth maxWidth="sm">
         <form onSubmit={(event) => void submit(event)}>
-          <DialogTitle>登记离线测向站</DialogTitle>
+          <DialogTitle>{editing ? `校准更新 · ${editing.station_code}` : '登记离线测向站'}</DialogTitle>
           <DialogContent>
             <Stack gap={2} sx={{ pt: 1 }}>
               <Stack direction={{ xs: 'column', sm: 'row' }} gap={2}>
-                <TextField label="站点编号" value={form.station_code} onChange={(event) => setForm({ ...form, station_code: event.target.value })} required fullWidth />
+                <TextField label="站点编号" value={form.station_code} onChange={(event) => setForm({ ...form, station_code: event.target.value })} required fullWidth disabled={Boolean(editing)} />
                 <TextField label="站点名称" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required fullWidth />
               </Stack>
               <Stack direction={{ xs: 'column', sm: 'row' }} gap={2}>
@@ -103,12 +147,43 @@ export function StationsPage() {
                 <MenuItem value="active">已启用</MenuItem><MenuItem value="calibration_due">待校准</MenuItem><MenuItem value="inactive">已停用</MenuItem>
               </TextField>
               <TextField label="校准时间" type="datetime-local" value={form.calibrated_at?.slice(0, 16) ?? ''} onChange={(event) => setForm({ ...form, calibrated_at: event.target.value ? new Date(event.target.value).toISOString() : null })} InputLabelProps={{ shrink: true }} />
+              {editing && (
+                <Alert severity="info" variant="outlined">
+                  保存后，该站所有未结案案例将以当前坐标、精度、偏置重新交汇；已确认或关闭的案例维持原样。
+                </Alert>
+              )}
             </Stack>
           </DialogContent>
-          <DialogActions><Button onClick={() => setOpen(false)} disabled={saving}>继续查看</Button><Button type="submit" variant="contained" startIcon={<CalibrationRounded />} disabled={saving}>保存校准站点</Button></DialogActions>
+          <DialogActions><Button onClick={() => setOpen(false)} disabled={saving}>继续查看</Button><Button type="submit" variant="contained" startIcon={<CalibrationRounded />} disabled={saving}>{editing ? '保存并重交汇' : '保存校准站点'}</Button></DialogActions>
         </form>
       </Dialog>
     </>
   )
 }
 
+function ReintersectionAlert({ summary, onDismiss }: { summary: ReintersectionSummary; onDismiss: () => void }) {
+  if (!summary.localization_changed) {
+    return <Alert severity="success" sx={{ mb: 2 }} onClose={onDismiss}>站点信息已保存，本次修改不影响交汇输入。</Alert>
+  }
+  const severity = summary.skipped_cases.length > 0 && summary.reintersected_case_ids.length === 0 ? 'warning' : 'success'
+  return (
+    <Alert severity={severity} sx={{ mb: 2 }} onClose={onDismiss}>
+      <Typography variant="body2">
+        已按站点当前值重算 {summary.recalibrated_observation_count} 条观测校正方位，
+        重新交汇 {summary.reintersected_case_ids.length} 个未结案案例
+        （{summary.reintersected_case_ids.length > 0 ? summary.reintersected_case_ids.map((id) => `#${id}`).join('、') : '无'}）；
+        已确认或关闭的案例保持原样。
+      </Typography>
+      {summary.skipped_cases.length > 0 && (
+        <Typography variant="body2" component="div" sx={{ mt: 0.5 }}>
+          未自动重跑：
+          {summary.skipped_cases.map((item, index) => (
+            <span key={`${item.case_id}-${item.reason}`}>
+              {index > 0 ? '；' : ''}案例 #{item.case_id}（{reintersectionSkipText[item.reason]}）
+            </span>
+          ))}
+        </Typography>
+      )}
+    </Alert>
+  )
+}

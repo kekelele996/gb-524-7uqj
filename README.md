@@ -37,6 +37,7 @@ docker compose down -v --remove-orphans
 ## 主要功能
 
 - 维护 WGS84 测向站坐标、天线偏置、精度和校准状态；原始方位与偏置校正方位同时保留。
+- 站点坐标、精度、天线偏置或启停用状态更新后，同一事务内以站点当前值重算该站在未结案案例（`draft/collecting/analyzing/pending_review`）中的观测校正方位，并对已有定位历史的案例追加一次重新交汇结果；`confirmed/closed` 案例的观测、估计与版本完全冻结。
 - 按案例录入频率、带宽、信号强度和质量，批量校验频率匹配与站点状态，排除操作保留原因和审计。
 - 在本地笛卡尔坐标图中显示测向站、方位射线、估计点、不确定区域、逐站残差和离群证据。
 - 二站几何交汇和三站以上加权最小二乘使用同一确定性求解器；近平行或近共线几何明确拒绝，不返回伪精确点。
@@ -95,7 +96,7 @@ docker compose down -v --remove-orphans
 | `POST` | `/api/v1/auth/login` | 登录，使用独立限流桶 |
 | `GET` | `/api/v1/auth/me` | 获取当前身份和角色 |
 | `GET/POST` | `/api/v1/stations` | 测向站列表与登记 |
-| `GET/PUT` | `/api/v1/stations/:id` | 站点详情与校准更新 |
+| `GET/PUT` | `/api/v1/stations/:id` | 站点详情与校准更新；更新响应 `meta.reintersection` 汇总未结案案例的校正重算与重新交汇情况 |
 | `GET` | `/api/v1/stations/:id/coverage` | 站点观测覆盖 |
 | `GET/POST` | `/api/v1/observations` | 观测列表与录入 |
 | `POST` | `/api/v1/observations/:id/exclude` | 保存原因并排除观测 |
@@ -132,6 +133,7 @@ docker compose down -v --remove-orphans
 4. 通过 2×2 对称矩阵特征值计算条件数。最小特征值过小或条件数超过 `GEOMETRY_CONDITION_LIMIT` 时返回 `GEOMETRY_DEGENERATE`，不形成定位点。
 5. 残差是观测方位与“测站指向估计点”的最小有符号角差；不确定半径综合站点距离、精度、加权 RMS 残差和几何因子，只表达模型不确定性。
 6. 离群候选仅在原始有效观测不少于 4 条、剔除后仍不少于 3 条、最大标准化残差超过 2.5 且候选残差至少改善 20% 时生成。原估计仍永久保存。
+7. 站点校准信息变化的传播规则：仅坐标、天线偏置、精度或启停用状态变化才触发；名称和校准时间不触发。重算校正方位只覆盖该站在未结案案例中的观测（原始方位不变），重新交汇以追加估计的方式保存，旧估计不可覆盖，案例 `version` 递增但状态机位置不变；几何退化、有效观测不足或频率不匹配时不生成估计，写入 `localization_estimate.reintersection_skipped` 审计并在响应 meta 中给出跳过原因，由分析员人工处理；从未运行过定位的案例不自动补跑。
 
 以上是适用于小区域的软件演示模型，不包含电波传播、地形、多径、同步误差或法规判定，不能替代经校准的专业测向流程。
 

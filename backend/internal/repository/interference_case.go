@@ -38,14 +38,45 @@ func (r *CaseRepository) List(ctx context.Context, page, pageSize int, status st
 }
 
 func (r *CaseRepository) Get(ctx context.Context, id uint) (model.InterferenceCase, error) {
+	return r.GetTx(ctx, r.db, id)
+}
+
+// GetTx 是 Get 的事务版本，供跨仓储编排使用。
+func (r *CaseRepository) GetTx(ctx context.Context, tx *gorm.DB, id uint) (model.InterferenceCase, error) {
 	var item model.InterferenceCase
-	if err := r.db.WithContext(ctx).First(&item, id).Error; err != nil {
+	if err := tx.WithContext(ctx).First(&item, id).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return model.InterferenceCase{}, api.NewError(404, "CASE_NOT_FOUND", "干扰案例不存在")
 		}
 		return model.InterferenceCase{}, fmt.Errorf("get interference case: %w", err)
 	}
 	return item, nil
+}
+
+// OpenCaseIDsForStation 返回引用了指定测向站、且案例尚未结案的去重案例 ID。
+func (r *CaseRepository) OpenCaseIDsForStation(ctx context.Context, tx *gorm.DB, stationID uint) ([]uint, error) {
+	var ids []uint
+	err := tx.WithContext(ctx).
+		Model(&model.BearingObservation{}).
+		Distinct("case_id").
+		Joins("JOIN interference_cases ON interference_cases.id = bearing_observations.case_id").
+		Where("bearing_observations.station_id = ?", stationID).
+		Where("interference_cases.case_status IN ?", constants.OpenCaseStatusValues()).
+		Order("case_id ASC").
+		Pluck("bearing_observations.case_id", &ids).Error
+	if err != nil {
+		return nil, fmt.Errorf("list open case ids for station: %w", err)
+	}
+	return ids, nil
+}
+
+// CountEstimatesTx 在调用方事务中统计案例已有定位结果数。
+func (r *CaseRepository) CountEstimatesTx(ctx context.Context, tx *gorm.DB, caseID uint) (int64, error) {
+	var estimates int64
+	if err := tx.WithContext(ctx).Model(&model.LocalizationEstimate{}).Where("case_id = ?", caseID).Count(&estimates).Error; err != nil {
+		return 0, fmt.Errorf("count case estimates: %w", err)
+	}
+	return estimates, nil
 }
 
 func (r *CaseRepository) Create(ctx context.Context, item *model.InterferenceCase, actor Actor) error {

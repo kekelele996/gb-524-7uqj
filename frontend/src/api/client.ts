@@ -1,4 +1,4 @@
-import type { ApiErrorPayload, ApiResponse, PageResponse } from '../types/api'
+import type { ApiErrorPayload, ApiResponse, MetaResponse, PageResponse } from '../types/api'
 
 export class ApiError extends Error {
   readonly code: string
@@ -56,6 +56,7 @@ export const apiClient = {
   get: <T>(path: string) => request<ApiResponse<T>>(path),
   getPage: <T>(path: string) => request<PageResponse<T>>(path),
   post: <T>(path: string, body: unknown) => request<ApiResponse<T>>(path, { method: 'POST', body: JSON.stringify(body) }),
-  put: <T>(path: string, body: unknown) => request<ApiResponse<T>>(path, { method: 'PUT', body: JSON.stringify(body) })
+  put: <T>(path: string, body: unknown) => request<ApiResponse<T>>(path, { method: 'PUT', body: JSON.stringify(body) }),
+  putMeta: <T, M>(path: string, body: unknown) => request<MetaResponse<T, M>>(path, { method: 'PUT', body: JSON.stringify(body) })
 }
 

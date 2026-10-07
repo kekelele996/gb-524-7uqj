@@ -36,6 +36,11 @@ func Success(c *gin.Context, status int, data any) {
 	c.JSON(status, response)
 }
 
+// SuccessMeta 在成功响应上附带分页之外的处理摘要（如站点变更后的重新交汇汇总）。
+func SuccessMeta(c *gin.Context, status int, data any, meta gin.H) {
+	c.JSON(status, gin.H{"data": data, "meta": meta, "request_id": RequestID(c)})
+}
+
 func Page(c *gin.Context, data any, page, pageSize int, total int64) {
 	c.JSON(http.StatusOK, gin.H{
 		"data":       data,
